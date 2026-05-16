@@ -11,6 +11,12 @@ from app.file_processor import FileProcessor
 from app.llm_extractor import LLMExtractor
 from app.excel_writer import ExcelWriter
 
+try:
+    from PyQt5.QtWidgets import QApplication, QFileDialog
+except Exception:
+    QApplication = None
+    QFileDialog = None
+
 # Load environment variables
 load_dotenv()
 
@@ -124,6 +130,31 @@ def _save_excel_to_custom_path(excel_buffer: bytes, output_path: str) -> str:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_bytes(excel_buffer)
     return str(target_path)
+
+
+def _browse_save_path(default_filename: str) -> str:
+    """Open a native Save As dialog and return selected .xlsx path."""
+    if QApplication is None or QFileDialog is None:
+        raise RuntimeError("PyQt5 is not available. Install it with: pip install PyQt5")
+
+    created_app = False
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+        created_app = True
+
+    try:
+        selected_path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save Excel file as",
+            default_filename,
+            "Excel Files (*.xlsx);;All Files (*)",
+        )
+    finally:
+        if created_app:
+            app.quit()
+
+    return selected_path
 
 def main():
     _initialize_state()
@@ -304,15 +335,29 @@ def main():
             use_container_width=True,
         )
 
-        default_custom_path = str(Path.cwd() / filename)
+        if "custom_output_path" not in st.session_state:
+            st.session_state.custom_output_path = ""
+
+        browse_clicked = st.button("📂 Browse save location", use_container_width=True)
+        if browse_clicked:
+            try:
+                selected_path = _browse_save_path(filename)
+                if selected_path:
+                    st.session_state.custom_output_path = selected_path
+            except Exception as error:
+                st.warning(f"Browse dialog unavailable: {str(error)}")
+
         custom_output_path = st.text_input(
             "Custom output path (save directly on this machine)",
-            value=default_custom_path,
-            help="Example: C:\\Users\\jahna\\Desktop\\my_report.xlsx",
+            key="custom_output_path",
+            placeholder="Click 'Browse save location' and choose where to save"
+           
         )
         save_custom = st.button("💾 Save file to custom path", use_container_width=True)
         if save_custom:
             try:
+                if not str(custom_output_path).strip():
+                    raise ValueError("Please choose a save path first using Browse, or enter a full file path.")
                 saved_path = _save_excel_to_custom_path(excel_buffer, custom_output_path)
                 st.success(f"File saved to: {saved_path}")
                 if auto_delete_after_download:
