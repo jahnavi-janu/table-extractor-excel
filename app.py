@@ -335,37 +335,39 @@ def main():
             use_container_width=True,
         )
 
-        if "custom_output_path" not in st.session_state:
-            st.session_state.custom_output_path = ""
+        #st.info("Custom path save is currently disabled. Please use the Download button above.")
 
-        browse_clicked = st.button("📂 Browse save location", use_container_width=True)
-        if browse_clicked:
-            try:
-                selected_path = _browse_save_path(filename)
-                if selected_path:
-                    st.session_state.custom_output_path = selected_path
-            except Exception as error:
-                st.warning(f"Browse dialog unavailable: {str(error)}")
-
-        custom_output_path = st.text_input(
-            "Custom output path (save directly on this machine)",
-            key="custom_output_path",
-            placeholder="Click 'Browse save location' and choose where to save"
-           
-        )
-        save_custom = st.button("💾 Save file to custom path", use_container_width=True)
-        if save_custom:
-            try:
-                if not str(custom_output_path).strip():
-                    raise ValueError("Please choose a save path first using Browse, or enter a full file path.")
-                saved_path = _save_excel_to_custom_path(excel_buffer, custom_output_path)
-                st.success(f"File saved to: {saved_path}")
-                if auto_delete_after_download:
-                    _clear_processed_data()
-                    st.info("Processed data auto-deleted from memory after save.")
-                    st.rerun()
-            except Exception as error:
-                st.error(f"Could not save file: {str(error)}")
+        # Custom-path save flow disabled as requested.
+        # if "custom_output_path" not in st.session_state:
+        #     st.session_state.custom_output_path = ""
+        #
+        # browse_clicked = st.button("📂 Browse save location", use_container_width=True)
+        # if browse_clicked:
+        #     try:
+        #         selected_path = _browse_save_path(filename)
+        #         if selected_path:
+        #             st.session_state.custom_output_path = selected_path
+        #     except Exception as error:
+        #         st.warning(f"Browse dialog unavailable: {str(error)}")
+        #
+        # custom_output_path = st.text_input(
+        #     "Custom output path (save directly on this machine)",
+        #     key="custom_output_path",
+        #     placeholder="Click 'Browse save location' and choose where to save"
+        # )
+        # save_custom = st.button("💾 Save file to custom path", use_container_width=True)
+        # if save_custom:
+        #     try:
+        #         if not str(custom_output_path).strip():
+        #             raise ValueError("Please choose a save path first using Browse, or enter a full file path.")
+        #         saved_path = _save_excel_to_custom_path(excel_buffer, custom_output_path)
+        #         st.success(f"File saved to: {saved_path}")
+        #         if auto_delete_after_download:
+        #             _clear_processed_data()
+        #             st.info("Processed data auto-deleted from memory after save.")
+        #             st.rerun()
+        #     except Exception as error:
+        #         st.error(f"Could not save file: {str(error)}")
 
         clear_now = st.button("🗑️ Clear processed data from memory", use_container_width=True)
         if clear_now:
