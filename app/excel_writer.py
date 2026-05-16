@@ -41,19 +41,19 @@ class ExcelWriter:
 
         current_row = 1
         max_col_widths = {}
+        # Detect if all tables have identical headers (same order and names)
+        dfs = [t.get("data") for t in tables if t.get("data") is not None]
+        same_headers = False
+        if dfs:
+            try:
+                first_cols = list(dfs[0].columns)
+                same_headers = all(list(df.columns) == first_cols for df in dfs)
+            except Exception:
+                same_headers = False
 
-        for idx, table_info in enumerate(tables, 1):
-            df = table_info.get('data')
-            if df is None:
-                continue
-
-            title = table_info.get('title', f'Table {idx}')
-            title_cell = worksheet.cell(row=current_row, column=1)
-            title_cell.value = f"Table {idx}: {title}"
-            title_cell.font = Font(bold=True, size=12)
-            current_row += 1
-
-            for col_idx, header in enumerate(df.columns, 1):
+        if same_headers:
+            # Write a single header row
+            for col_idx, header in enumerate(first_cols, 1):
                 cell = worksheet.cell(row=current_row, column=col_idx)
                 cell.value = header
                 cell.fill = self.header_fill
@@ -65,23 +65,59 @@ class ExcelWriter:
             worksheet.row_dimensions[current_row].height = 30
             current_row += 1
 
-            for row in df.values:
-                for col_idx, value in enumerate(row, 1):
+            # Append all rows from all tables under the same header
+            for df in dfs:
+                for row in df.values:
+                    for col_idx, value in enumerate(row, 1):
+                        cell = worksheet.cell(row=current_row, column=col_idx)
+                        cell.value = value
+                        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                        cell.border = self.border
+                        max_col_widths[col_idx] = max(max_col_widths.get(col_idx, 0), len(str(value)))
+                    current_row += 1
+
+        else:
+            # Fallback: write each table with its own header and title
+            for idx, table_info in enumerate(tables, 1):
+                df = table_info.get('data')
+                if df is None:
+                    continue
+
+                title = table_info.get('title', f'Table {idx}')
+                title_cell = worksheet.cell(row=current_row, column=1)
+                title_cell.value = f"Table {idx}: {title}"
+                title_cell.font = Font(bold=True, size=12)
+                current_row += 1
+
+                for col_idx, header in enumerate(df.columns, 1):
                     cell = worksheet.cell(row=current_row, column=col_idx)
-                    cell.value = value
-                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                    cell.value = header
+                    cell.fill = self.header_fill
+                    cell.font = self.header_font
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                     cell.border = self.border
-                    max_col_widths[col_idx] = max(max_col_widths.get(col_idx, 0), len(str(value)))
+                    max_col_widths[col_idx] = max(max_col_widths.get(col_idx, 0), len(str(header)))
+
+                worksheet.row_dimensions[current_row].height = 30
                 current_row += 1
 
-            description = table_info.get('description', '')
-            if description:
-                desc_cell = worksheet.cell(row=current_row, column=1)
-                desc_cell.value = f"Description: {description}"
-                desc_cell.font = Font(italic=True, size=9, color="666666")
-                current_row += 1
+                for row in df.values:
+                    for col_idx, value in enumerate(row, 1):
+                        cell = worksheet.cell(row=current_row, column=col_idx)
+                        cell.value = value
+                        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                        cell.border = self.border
+                        max_col_widths[col_idx] = max(max_col_widths.get(col_idx, 0), len(str(value)))
+                    current_row += 1
 
-            current_row += 1
+                description = table_info.get('description', '')
+                if description:
+                    desc_cell = worksheet.cell(row=current_row, column=1)
+                    desc_cell.value = f"Description: {description}"
+                    desc_cell.font = Font(italic=True, size=9, color="666666")
+                    current_row += 1
+
+                current_row += 1
 
         for col_idx, max_length in max_col_widths.items():
             worksheet.column_dimensions[get_column_letter(col_idx)].width = min(max_length + 2, 50)
