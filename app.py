@@ -141,26 +141,46 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("Settings")
+        
+        try:
+            api_key = st.secrets["OPENAI_API_KEY"]
+        except (KeyError, FileNotFoundError):
+            api_key = os.getenv("OPENAI_API_KEY", "")
+        
+        if not api_key:
+            st.error("⚠️ OpenAI API key not configured. Please set OPENAI_API_KEY in secrets or .env file.")
+            st.stop()
 
-        api_key = st.text_input(
-            "OpenAI API Key",
-            value=os.getenv("OPENAI_API_KEY", ""),
-            type="password",
-            help="Your OpenAI API key for table extraction"
-        )
-
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
+        st.success("✓ API key loaded securely from config")
 
         st.divider()
         st.subheader("Privacy")
         enable_pii_masking = st.checkbox("Enable PII masking", value=True)
         auto_detect_pii_columns = st.checkbox("Auto-mask common PII columns", value=True)
         auto_delete_after_download = st.checkbox("Auto-delete processed data after download", value=True)
-
+        
         st.divider()
         st.subheader("Export")
         export_as_multiple_sheets = st.checkbox("Multiple sheets (one table per sheet)", value=False)
+
+        st.divider()
+        with st.expander("📋 Privacy & Data Policy", expanded=False):
+            st.markdown("""
+**Data Handling:**
+- Only table images are sent to OpenAI Vision API for extraction
+- Original PDF/Word files are NOT uploaded
+- Extracted tables are processed in-memory and auto-deleted based on your settings
+
+**OpenAI Data Usage:**
+- Your images may be used to improve OpenAI models (per OpenAI terms)
+- To disable: Contact OpenAI support for API account data retention settings
+- Images in transit: HTTPS encrypted
+
+**Recommendation:**
+- Enable PII masking for tables containing sensitive data
+- Use auto-delete to clear processed data after download
+- Do not upload files with highly sensitive information if concerned
+            """)
 
     if st.session_state.processed_at:
         age_seconds = int(time.time() - st.session_state.processed_at)
@@ -185,8 +205,8 @@ def main():
     if uploaded_file is not None and process_clicked:
         try:
             # Validate API key
-            if not api_key:
-                st.error("❌ Please provide your OpenAI API Key in the sidebar")
+            if not api_key or api_key == "":
+                st.error("❌ API key not available")
                 return
             
             with st.spinner("Processing file..."):
