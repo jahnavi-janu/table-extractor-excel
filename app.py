@@ -4,7 +4,7 @@ import re
 import time
 import io
 from pathlib import Path
-from typing import Dict, Any, List, Set
+from typing import Dict, Any, List, Set, Tuple
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -33,10 +33,14 @@ def _initialize_state() -> None:
         st.session_state.processed_at = None
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
-    if "edited_image_bytes" not in st.session_state:
-        st.session_state.edited_image_bytes = None
-    if "edited_image_filename" not in st.session_state:
-        st.session_state.edited_image_filename = "edited_image.png"
+    if "edited_file_bytes" not in st.session_state:
+        st.session_state.edited_file_bytes = None
+    if "edited_file_filename" not in st.session_state:
+        st.session_state.edited_file_filename = "edited_file.png"
+    if "edited_file_mime" not in st.session_state:
+        st.session_state.edited_file_mime = "image/png"
+    if "edited_preview_images" not in st.session_state:
+        st.session_state.edited_preview_images = []
 
 
 def _clear_processed_data() -> None:
@@ -45,9 +49,11 @@ def _clear_processed_data() -> None:
     st.session_state.processed_at = None
 
 
-def _clear_image_edit_data() -> None:
-    st.session_state.edited_image_bytes = None
-    st.session_state.edited_image_filename = "edited_image.png"
+def _clear_edit_data() -> None:
+    st.session_state.edited_file_bytes = None
+    st.session_state.edited_file_filename = "edited_file.png"
+    st.session_state.edited_file_mime = "image/png"
+    st.session_state.edited_preview_images = []
 
 
 def _mask_sensitive_text(value: Any) -> Any:
@@ -186,6 +192,58 @@ def _is_image_extension(file_ext: str) -> bool:
     return file_ext in {"png", "jpg", "jpeg", "bmp", "tiff"}
 
 
+def _is_pdf_extension(file_ext: str) -> bool:
+    return file_ext == "pdf"
+
+
+def _render_preview_png(image: Image.Image) -> bytes:
+    preview_buffer = io.BytesIO()
+    image.convert("RGB").save(preview_buffer, format="PNG")
+    return preview_buffer.getvalue()
+
+
+def _edit_file_from_prompt(uploaded_file: Any, prompt: str, api_key: str) -> Tuple[bytes, str, str, List[bytes]]:
+    _reset_uploaded_file(uploaded_file)
+    file_ext = _get_file_extension(uploaded_file)
+    editor = ImageEditor(api_key)
+
+    if _is_image_extension(file_ext):
+        image = Image.open(io.BytesIO(uploaded_file.read())).convert("RGBA")
+        edited_bytes = editor.edit_image(image=image, prompt=prompt)
+        return (
+            edited_bytes,
+            f"{Path(uploaded_file.name).stem}_edited.png",
+            "image/png",
+            [edited_bytes],
+        )
+
+    if _is_pdf_extension(file_ext):
+        file_processor = FileProcessor()
+        page_images = file_processor.extract_images(uploaded_file)
+        if not page_images:
+            raise ValueError("No pages found in PDF.")
+
+        edited_pages: List[Image.Image] = []
+        preview_images: List[bytes] = []
+        for page_image in page_images:
+            edited_page_bytes = editor.edit_image(image=page_image, prompt=prompt)
+            edited_page = Image.open(io.BytesIO(edited_page_bytes)).convert("RGB")
+            edited_pages.append(edited_page)
+            preview_images.append(_render_preview_png(edited_page))
+
+        pdf_buffer = io.BytesIO()
+        first_page, other_pages = edited_pages[0], edited_pages[1:]
+        first_page.save(pdf_buffer, format="PDF", save_all=True, append_images=other_pages)
+        return (
+            pdf_buffer.getvalue(),
+            f"{Path(uploaded_file.name).stem}_edited.pdf",
+            "application/pdf",
+            preview_images,
+        )
+
+    raise ValueError("For editing, upload an image (PNG/JPG/BMP/TIFF) or PDF.")
+
+
 def _infer_chat_action(prompt: str, uploaded_file: Any) -> str:
     prompt_lower = (prompt or "").lower()
     file_ext = _get_file_extension(uploaded_file)
@@ -292,11 +350,11 @@ def main():
         age_seconds = int(time.time() - st.session_state.processed_at)
         st.caption(f"Session data age: {age_seconds} seconds")
 
-    tab_chat, tab_tables, tab_image = st.tabs(["🤖 Assistant Chat", "📊 Table Extractor", "🖼️ Image Edit"])
+    tab_chat, tab_tables, tab_edit = st.tabs(["🤖 Assistant Chat", "📊 Table Extractor", "✏️ Edit"])
 
     with tab_chat:
         st.subheader("Assistant")
-        st.caption("Ask me to extract tables to Excel or edit an image. Upload a file, then type your request.")
+        st.caption("Ask me to extract tables to Excel or edit an image/PDF. Upload a file, then type your request.")
 
         chat_uploaded_file = st.file_uploader(
             "Upload file for chat action",
@@ -334,26 +392,26 @@ def main():
                                 )
 
                     elif action == "image_edit":
-                        file_ext = _get_file_extension(chat_uploaded_file)
                         if chat_uploaded_file is None:
-                            assistant_text = "Please upload an image file first (PNG/JPG/BMP/TIFF)."
-                        elif not _is_image_extension(file_ext):
-                            assistant_text = "For image editing, upload an image (PNG/JPG/BMP/TIFF)."
+                            assistant_text = "Please upload an image or PDF first (PNG/JPG/BMP/TIFF/PDF)."
                         else:
-                            _reset_uploaded_file(chat_uploaded_file)
-                            image = Image.open(io.BytesIO(chat_uploaded_file.read())).convert("RGBA")
-                            editor = ImageEditor(api_key)
-                            with st.spinner("Editing image..."):
-                                edited_bytes = editor.edit_image(image=image, prompt=user_prompt)
+                            with st.spinner("Applying edit..."):
+                                edited_bytes, edited_filename, edited_mime, preview_images = _edit_file_from_prompt(
+                                    uploaded_file=chat_uploaded_file,
+                                    prompt=user_prompt,
+                                    api_key=api_key,
+                                )
 
-                            st.session_state.edited_image_bytes = edited_bytes
-                            st.session_state.edited_image_filename = f"{Path(chat_uploaded_file.name).stem}_edited.png"
+                            st.session_state.edited_file_bytes = edited_bytes
+                            st.session_state.edited_file_filename = edited_filename
+                            st.session_state.edited_file_mime = edited_mime
+                            st.session_state.edited_preview_images = preview_images
                             st.session_state.processed_at = time.time()
-                            assistant_text = "Done ✅ Image edited successfully. Preview and download are shown below."
+                            assistant_text = "Done ✅ Edit completed successfully. Preview and download are shown below."
                     else:
                         assistant_text = (
                             "I can currently do two actions: (1) extract tables to Excel and "
-                            "(2) edit images from your prompt. Please upload a file and ask one of these."
+                            "(2) edit images/PDFs from your prompt. Please upload a file and ask one of these."
                         )
 
                 except Exception as error:
@@ -362,19 +420,29 @@ def main():
                 st.markdown(assistant_text)
                 st.session_state.chat_messages.append({"role": "assistant", "content": assistant_text})
 
-        if st.session_state.edited_image_bytes:
-            st.markdown("### Latest Edited Image")
-            st.image(st.session_state.edited_image_bytes, use_container_width=True)
+        if st.session_state.edited_file_bytes:
+            st.markdown("### Latest Edited Output")
+            if st.session_state.edited_preview_images:
+                st.image(st.session_state.edited_preview_images[0], use_container_width=True)
+                if len(st.session_state.edited_preview_images) > 1:
+                    st.caption(f"Previewing page 1 of {len(st.session_state.edited_preview_images)} edited pages.")
+
+            file_kind = "File"
+            if st.session_state.edited_file_mime == "image/png":
+                file_kind = "Image"
+            elif st.session_state.edited_file_mime == "application/pdf":
+                file_kind = "PDF"
+
             image_downloaded_from_chat = st.download_button(
-                "⬇️ Download Edited Image",
-                data=st.session_state.edited_image_bytes,
-                file_name=st.session_state.edited_image_filename,
-                mime="image/png",
-                key="chat_download_edited_image",
+                f"⬇️ Download Edited {file_kind}",
+                data=st.session_state.edited_file_bytes,
+                file_name=st.session_state.edited_file_filename,
+                mime=st.session_state.edited_file_mime,
+                key="chat_download_edited_file",
             )
             if image_downloaded_from_chat and auto_delete_after_download:
-                _clear_image_edit_data()
-                st.success("Image download completed. Edited image auto-deleted from memory.")
+                _clear_edit_data()
+                st.success("Download completed. Edited output auto-deleted from memory.")
                 st.rerun()
 
         if st.button("Clear chat history", key="clear_chat_history"):
@@ -475,66 +543,88 @@ def main():
                 st.success("Download completed. Processed data auto-deleted from memory.")
                 st.rerun()
 
-    with tab_image:
-        st.subheader("Prompt-based Image Editing")
-        st.caption("Upload an image and describe exactly what should change.")
+    with tab_edit:
+        st.subheader("Prompt-based Editing")
+        st.caption("Upload an image or PDF and describe exactly what should change.")
 
-        image_uploaded_file = st.file_uploader(
-            "Upload image",
-            type=["png", "jpg", "jpeg", "bmp", "tiff"],
-            key="image_edit_uploaded_file",
+        edit_uploaded_file = st.file_uploader(
+            "Upload image or PDF",
+            type=["pdf", "png", "jpg", "jpeg", "bmp", "tiff"],
+            key="edit_uploaded_file",
         )
-        image_prompt = st.text_area(
+        edit_prompt = st.text_area(
             "Describe the edit",
             placeholder="Example: Remove background and make it plain white. Keep subject unchanged.",
-            key="image_edit_prompt",
+            key="edit_prompt",
         )
-        apply_edit = st.button("✨ Apply Edit", use_container_width=True, key="image_edit_apply")
+        apply_edit = st.button("✨ Apply Edit", use_container_width=True, key="edit_apply")
 
-        if image_uploaded_file is not None:
-            _reset_uploaded_file(image_uploaded_file)
-            preview_bytes = image_uploaded_file.read()
-            st.markdown("**Original image**")
-            st.image(preview_bytes, use_container_width=True)
+        if edit_uploaded_file is not None:
+            file_ext = _get_file_extension(edit_uploaded_file)
+            if _is_image_extension(file_ext):
+                _reset_uploaded_file(edit_uploaded_file)
+                preview_bytes = edit_uploaded_file.read()
+                st.markdown("**Original image**")
+                st.image(preview_bytes, use_container_width=True)
+            elif _is_pdf_extension(file_ext):
+                _reset_uploaded_file(edit_uploaded_file)
+                pdf_pages = FileProcessor().extract_images(edit_uploaded_file)
+                st.markdown("**Original PDF (first page preview)**")
+                if pdf_pages:
+                    st.image(_render_preview_png(pdf_pages[0]), use_container_width=True)
+                    if len(pdf_pages) > 1:
+                        st.caption(f"Previewing page 1 of {len(pdf_pages)} pages.")
 
         if apply_edit:
             try:
-                if image_uploaded_file is None:
-                    raise ValueError("Please upload an image first.")
-                if not image_prompt.strip():
+                if edit_uploaded_file is None:
+                    raise ValueError("Please upload an image or PDF first.")
+                if not edit_prompt.strip():
                     raise ValueError("Please enter an edit prompt.")
 
-                _reset_uploaded_file(image_uploaded_file)
-                source_image = Image.open(io.BytesIO(image_uploaded_file.read())).convert("RGBA")
+                with st.spinner("Applying edit..."):
+                    edited_bytes, edited_filename, edited_mime, preview_images = _edit_file_from_prompt(
+                        uploaded_file=edit_uploaded_file,
+                        prompt=edit_prompt,
+                        api_key=api_key,
+                    )
 
-                with st.spinner("Applying image edit..."):
-                    editor = ImageEditor(api_key)
-                    edited_bytes = editor.edit_image(source_image, image_prompt)
-
-                st.session_state.edited_image_bytes = edited_bytes
-                st.session_state.edited_image_filename = f"{Path(image_uploaded_file.name).stem}_edited.png"
+                st.session_state.edited_file_bytes = edited_bytes
+                st.session_state.edited_file_filename = edited_filename
+                st.session_state.edited_file_mime = edited_mime
+                st.session_state.edited_preview_images = preview_images
                 st.session_state.processed_at = time.time()
-                st.success("✅ Image edited successfully")
+                st.success("✅ Edit completed successfully")
             except Exception as error:
-                st.error(f"❌ Could not edit image: {str(error)}")
+                st.error(f"❌ Could not apply edit: {str(error)}")
 
-        if st.session_state.edited_image_bytes:
-            st.markdown("**Edited image**")
-            st.image(st.session_state.edited_image_bytes, use_container_width=True)
+        if st.session_state.edited_file_bytes:
+            st.markdown("**Edited output**")
+            if st.session_state.edited_preview_images:
+                st.image(st.session_state.edited_preview_images[0], use_container_width=True)
+                if len(st.session_state.edited_preview_images) > 1:
+                    st.caption(f"Previewing page 1 of {len(st.session_state.edited_preview_images)} edited pages.")
+
+            file_kind = "File"
+            if st.session_state.edited_file_mime == "image/png":
+                file_kind = "Image"
+            elif st.session_state.edited_file_mime == "application/pdf":
+                file_kind = "PDF"
+
             image_downloaded_from_tab = st.download_button(
-                "⬇️ Download Edited Image",
-                data=st.session_state.edited_image_bytes,
-                file_name=st.session_state.edited_image_filename,
-                mime="image/png",
-                key="tab_download_edited_image",
+                f"⬇️ Download Edited {file_kind}",
+                data=st.session_state.edited_file_bytes,
+                file_name=st.session_state.edited_file_filename,
+                mime=st.session_state.edited_file_mime,
+                key="tab_download_edited_file",
             )
             if image_downloaded_from_tab and auto_delete_after_download:
-                _clear_image_edit_data()
-                st.success("Image download completed. Edited image auto-deleted from memory.")
+                _clear_edit_data()
+                st.success("Download completed. Edited output auto-deleted from memory.")
                 st.rerun()
             if st.button("🗑️ Clear edited image", use_container_width=True, key="clear_edited_image"):
-                _clear_image_edit_data()
-                st.success("Edited image cleared from memory.")
+                _clear_edit_data()
+                st.success("Edited output cleared from memory.")
                 st.rerun()
 
 if __name__ == "__main__":
